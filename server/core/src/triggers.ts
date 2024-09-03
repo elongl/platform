@@ -16,20 +16,21 @@
 
 import core, {
   TxFactory,
+  TxProcessor,
   cutObjectArray,
   groupByArray,
   matchQuery,
-  type AttachedDoc,
   type Class,
   type Doc,
   type DocumentQuery,
   type Hierarchy,
+  type MeasureContext,
+  type ModelDb,
   type Obj,
   type Ref,
-  type SessionOperationContext,
   type Tx,
-  type TxCollectionCUD,
-  type TxCreateDoc
+  type TxCreateDoc,
+  type WithLookup
 } from '@hcengineering/core'
 
 import { Analytics } from '@hcengineering/analytics'
@@ -37,11 +38,11 @@ import { getResource, type Resource } from '@hcengineering/platform'
 import type { Trigger, TriggerControl, TriggerFunc } from './types'
 
 import serverCore from './plugin'
-import type { SessionContextImpl } from './utils'
+import type { SessionDataImpl } from './utils'
 
 interface TriggerRecord {
   query?: DocumentQuery<Tx>
-  trigger: { op: TriggerFunc, resource: Resource<TriggerFunc>, isAsync: boolean }
+  trigger: { op: TriggerFunc | Promise<TriggerFunc>, resource: Resource<TriggerFunc>, isAsync: boolean }
 
   arrays: boolean
 }
@@ -53,40 +54,50 @@ export class Triggers {
 
   constructor (protected readonly hierarchy: Hierarchy) {}
 
-  async tx (tx: Tx): Promise<void> {
-    if (tx._class === core.class.TxCollectionCUD) {
-      tx = (tx as TxCollectionCUD<Doc, AttachedDoc>).tx
+  init (model: ModelDb): void {
+    const allTriggers = model.findAllSync(serverCore.class.Trigger, {})
+    for (const t of allTriggers) {
+      this.addTrigger(t)
     }
-    if (tx._class === core.class.TxCreateDoc) {
-      const createTx = tx as TxCreateDoc<Doc>
-      if (createTx.objectClass === serverCore.class.Trigger) {
-        const match = (createTx as TxCreateDoc<Trigger>).attributes.txMatch
+  }
 
-        const trigger = (createTx as TxCreateDoc<Trigger>).attributes.trigger
-        const func = await getResource(trigger)
-        const isAsync = (createTx as TxCreateDoc<Trigger>).attributes.isAsync === true
+  private addTrigger (t: WithLookup<Trigger>): void {
+    const match = t.txMatch
 
-        this.triggers.push({
-          query: match,
-          trigger: { op: func, resource: trigger, isAsync },
-          arrays: (createTx as TxCreateDoc<Trigger>).attributes.arrays === true
-        })
+    const trigger = t.trigger
+    const func = getResource(trigger)
+    const isAsync = t.isAsync === true
+    this.triggers.push({
+      query: match,
+      trigger: { op: func, resource: trigger, isAsync },
+      arrays: t.arrays === true
+    })
+  }
+
+  async tx (txes: Tx[]): Promise<void> {
+    for (const tx of txes) {
+      if (tx._class === core.class.TxCreateDoc) {
+        const createTx = tx as TxCreateDoc<Doc>
+        if (createTx.objectClass === serverCore.class.Trigger) {
+          const trigger = TxProcessor.createDoc2Doc(createTx as TxCreateDoc<Trigger>)
+          this.addTrigger(trigger)
+        }
       }
     }
   }
 
   async apply (
-    ctx: SessionOperationContext,
+    ctx: MeasureContext,
     tx: Tx[],
-    ctrl: Omit<TriggerControl, 'txFactory' | 'apply'>
+    ctrl: Omit<TriggerControl, 'txFactory'>
   ): Promise<{
       transactions: Tx[]
-      performAsync?: (ctx: SessionOperationContext) => Promise<Tx[]>
+      performAsync?: (ctx: MeasureContext) => Promise<Tx[]>
     }> {
     const result: Tx[] = []
     const apply: Tx[] = []
 
-    const suppressAsync = (ctx as SessionContextImpl).isAsyncContext ?? false
+    const suppressAsync = (ctx as MeasureContext<SessionDataImpl>).contextData.isAsyncContext ?? false
 
     const asyncRequest: {
       matches: Tx[]
@@ -95,7 +106,7 @@ export class Triggers {
     }[] = []
 
     const applyTrigger = async (
-      ctx: SessionOperationContext,
+      ctx: MeasureContext,
       matches: Tx[],
       { trigger, arrays }: TriggerRecord,
       result: Tx[],
@@ -105,18 +116,19 @@ export class Triggers {
 
       const tctrl: TriggerControl = {
         ...ctrl,
-        operationContext: ctx,
-        ctx: ctx.ctx,
+        ctx,
         txFactory: null as any, // Will be set later
-        findAll: async (clazz, query, options) => await ctrl.findAllCtx(ctx.ctx, clazz, query, options),
-        apply: async (tx, needResult) => {
+        apply: async (ctx, tx, needResult) => {
           apply.push(...tx)
-          return await ctrl.applyCtx(ctx, tx, needResult)
+          return await ctrl.apply(ctx, tx, needResult)
         },
         txes: {
           apply,
           result
         }
+      }
+      if (trigger.op instanceof Promise) {
+        trigger.op = await trigger.op
       }
       for (const [k, v] of group.entries()) {
         const m = arrays ? [v] : v
@@ -125,7 +137,7 @@ export class Triggers {
           try {
             result.push(...(await trigger.op(tx, tctrl)))
           } catch (err: any) {
-            ctx.ctx.error('failed to process trigger', { trigger: trigger.resource, tx, err })
+            ctx.error('failed to process trigger', { trigger: trigger.resource, tx, err })
             Analytics.handleError(err)
           }
         }
@@ -176,7 +188,7 @@ export class Triggers {
                   await applyTrigger(ctx, request.matches, request, result, apply)
                 })
               } catch (err: any) {
-                ctx.ctx.error('failed to process trigger', {
+                ctx.error('failed to process trigger', {
                   trigger: request.trigger.resource,
                   matches: cutObjectArray(request.matches),
                   err

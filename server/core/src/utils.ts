@@ -1,22 +1,24 @@
 import core, {
+  AccountRole,
   WorkspaceEvent,
   generateId,
   getTypeOf,
+  systemAccountEmail,
+  type Account,
   type Branding,
   type BrandingMap,
   type BulkUpdateEvent,
   type Class,
   type Doc,
-  type FullParamsType,
-  type MeasureContext,
-  type ParamsType,
+  type ModelDb,
   type Ref,
+  type SessionData,
   type TxWorkspaceEvent,
   type WorkspaceIdWithUrl
 } from '@hcengineering/core'
+import platform, { PlatformError, Severity, Status } from '@hcengineering/platform'
 import { type Hash } from 'crypto'
 import fs from 'fs'
-import type { SessionContext } from './types'
 
 /**
  * Return some estimation for object size
@@ -134,46 +136,48 @@ export function updateHashForDoc (hash: Hash, _obj: any): void {
   }
 }
 
-export class SessionContextImpl implements SessionContext {
+export function getUser (modelDb: ModelDb, userEmail: string | undefined, admin?: boolean): Account {
+  if (userEmail === undefined) {
+    throw new PlatformError(new Status(Severity.ERROR, platform.status.Forbidden, {}))
+  }
+  const account = modelDb.findAllSync(core.class.Account, { email: userEmail })[0]
+  if (account === undefined) {
+    if (userEmail === systemAccountEmail || admin === true) {
+      return {
+        _id: core.account.System,
+        _class: core.class.Account,
+        role: AccountRole.Owner,
+        email: systemAccountEmail,
+        space: core.space.Model,
+        modifiedBy: core.account.System,
+        modifiedOn: 0
+      }
+    }
+    throw new PlatformError(new Status(Severity.ERROR, platform.status.Forbidden, {}))
+  }
+  return account
+}
+
+export class SessionDataImpl implements SessionData {
+  account: Account
   constructor (
-    readonly ctx: MeasureContext,
     readonly userEmail: string,
     readonly sessionId: string,
     readonly admin: boolean | undefined,
-    readonly derived: SessionContext['derived'],
+    readonly broadcast: SessionData['broadcast'],
     readonly workspace: WorkspaceIdWithUrl,
     readonly branding: Branding | null,
     readonly isAsyncContext: boolean,
     readonly removedMap: Map<Ref<Doc>, Doc>,
-    readonly contextCache: Map<string, any>
-  ) {}
+    readonly contextCache: Map<string, any>,
+    readonly modelDb: ModelDb,
+    account?: Account
+  ) {
+    this.account = account ?? getUser(modelDb, userEmail, admin)
+  }
 
-  with<T>(
-    name: string,
-    params: ParamsType,
-    op: (ctx: SessionContext) => T | Promise<T>,
-    fullParams?: FullParamsType
-  ): Promise<T> {
-    return this.ctx.with(
-      name,
-      params,
-      async (ctx) =>
-        await op(
-          new SessionContextImpl(
-            ctx,
-            this.userEmail,
-            this.sessionId,
-            this.admin,
-            this.derived,
-            this.workspace,
-            this.branding,
-            this.isAsyncContext,
-            this.removedMap,
-            this.contextCache
-          )
-        ),
-      fullParams
-    )
+  getAccount (account: Ref<Account>): Account | undefined {
+    return this.modelDb.findAllSync(core.class.Account, { _id: account })[0]
   }
 }
 

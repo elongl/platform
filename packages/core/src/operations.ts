@@ -1,3 +1,4 @@
+import { Analytics } from '@hcengineering/analytics'
 import { deepEqual } from 'fast-equals'
 import { DocumentUpdate, DOMAIN_MODEL, Hierarchy, MixinData, MixinUpdate, ModelDb, toFindResult } from '.'
 import type {
@@ -26,7 +27,6 @@ import type {
   WithLookup
 } from './storage'
 import { DocumentClassQuery, Tx, TxApplyResult, TxCUD, TxFactory, TxProcessor } from './tx'
-import { Analytics } from '@hcengineering/analytics'
 
 /**
  * @public
@@ -313,7 +313,7 @@ export class TxOperations implements Omit<Client, 'notify'> {
     return this.removeDoc(doc._class, doc.space, doc._id)
   }
 
-  apply (scope: string, measure?: string): ApplyOperations {
+  apply (scope?: string, measure?: string): ApplyOperations {
     return new ApplyOperations(this, scope, measure)
   }
 
@@ -443,7 +443,7 @@ export class ApplyOperations extends TxOperations {
   notMatches: DocumentClassQuery<Doc>[] = []
   constructor (
     readonly ops: TxOperations,
-    readonly scope: string,
+    readonly scope?: string,
     readonly measureName?: string
   ) {
     const txClient: Client = {
@@ -499,6 +499,11 @@ export class ApplyOperations extends TxOperations {
       }
     }
     return { result: true, time: 0, serverTime: 0 }
+  }
+
+  // Apply for this will reuse, same apply context.
+  apply (scope?: string, measure?: string): ApplyOperations {
+    return this
   }
 }
 

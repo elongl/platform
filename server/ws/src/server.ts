@@ -28,7 +28,8 @@ import core, {
   type MeasureContext,
   type Tx,
   type TxWorkspaceEvent,
-  type WorkspaceId
+  type WorkspaceId,
+  type WorkspaceIdWithUrl
 } from '@hcengineering/core'
 import { unknownError, type Status } from '@hcengineering/platform'
 import { type HelloRequest, type HelloResponse, type Request, type Response } from '@hcengineering/rpc'
@@ -96,7 +97,12 @@ class TSessionManager implements SessionManager {
 
   constructor (
     readonly ctx: MeasureContext,
-    readonly sessionFactory: (token: Token, pipeline: Pipeline) => Session,
+    readonly sessionFactory: (
+      token: Token,
+      pipeline: Pipeline,
+      workspaceId: WorkspaceIdWithUrl,
+      branding: Branding | null
+    ) => Session,
     readonly timeouts: Timeouts,
     readonly brandingMap: BrandingMap
   ) {
@@ -228,8 +234,8 @@ class TSessionManager implements SessionManager {
     this.ticks++
   }
 
-  createSession (token: Token, pipeline: Pipeline): Session {
-    return this.sessionFactory(token, pipeline)
+  createSession (token: Token, pipeline: Pipeline, workspaceId: WorkspaceIdWithUrl, branding: Branding | null): Session {
+    return this.sessionFactory(token, pipeline, workspaceId, branding)
   }
 
   async getWorkspaceInfo (
@@ -397,7 +403,16 @@ class TSessionManager implements SessionManager {
       pipeline = await ctx.with('💤 wait', { workspaceName }, async () => await (workspace as Workspace).pipeline)
     }
 
-    const session = this.createSession(token, pipeline)
+    const session = this.createSession(
+      token,
+      pipeline,
+      {
+        ...workspace.workspaceId,
+        workspaceName: workspaceInfo.workspaceName ?? '',
+        workspaceUrl: workspaceInfo.workspaceUrl ?? ''
+      },
+      branding
+    )
 
     session.sessionId = sessionId !== undefined && (sessionId ?? '').trim().length > 0 ? sessionId : generateId()
     session.sessionInstanceId = generateId()
@@ -469,7 +484,7 @@ class TSessionManager implements SessionManager {
       ctx,
       { ...token.workspace, workspaceUrl, workspaceName },
       true,
-      (tx, targets, exclude) => {
+      (ctx, tx, targets, exclude) => {
         this.broadcastAll(workspace, tx, targets, exclude)
       },
       workspace.branding
@@ -569,7 +584,7 @@ class TSessionManager implements SessionManager {
         pipelineCtx,
         { ...token.workspace, workspaceUrl, workspaceName },
         upgrade,
-        (tx, targets, exclude) => {
+        (ctx, tx, targets, exclude) => {
           this.broadcastAll(workspace, tx, targets, exclude)
         },
         branding
@@ -610,7 +625,7 @@ class TSessionManager implements SessionManager {
   ): Promise<void> {
     try {
       const user = (
-        await session.pipeline().modelDb.findAll(
+        await session.pipeline().context.modelDb.findAll(
           core.class.Account,
           {
             email: session.getUser()
@@ -625,9 +640,6 @@ class TSessionManager implements SessionManager {
           // No response
         },
         ctx,
-        send: async (msg, target, exclude) => {
-          this.broadcast(null, workspaceId, msg, target, exclude)
-        },
         sendError: async (msg, error: Status) => {
           // Assume no error send
         }
@@ -919,9 +931,6 @@ class TSessionManager implements SessionManager {
             userCtx.end()
           },
           ctx,
-          send: async (msg, target, exclude) => {
-            this.broadcast(service, wsRef.workspaceId, msg, target, exclude)
-          },
           sendError: async (msg, error: Status) => {
             await sendResponse(ctx, service, ws, {
               id: request.id,
@@ -980,7 +989,12 @@ export function start (
   opt: {
     port: number
     pipelineFactory: PipelineFactory
-    sessionFactory: (token: Token, pipeline: Pipeline) => Session
+    sessionFactory: (
+      token: Token,
+      pipeline: Pipeline,
+      workspaceId: WorkspaceIdWithUrl,
+      branding: Branding | null
+    ) => Session
     brandingMap: BrandingMap
     serverFactory: ServerFactory
     enableCompression?: boolean

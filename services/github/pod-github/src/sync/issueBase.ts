@@ -393,7 +393,7 @@ export abstract class IssueSyncManagerBase {
             return true
           })
 
-          const updateTodos = this.client.apply('todos' + account)
+          const updateTodos = this.client.apply()
           for (const [k, v] of Object.entries(todos)) {
             await updateTodos.updateDoc(time.class.ToDo, time.space.ToDos, k as Ref<ToDo>, {
               doneOn: v ? Date.now() : null
@@ -1071,7 +1071,7 @@ export abstract class IssueSyncManagerBase {
       url: { $in: issues.map((it) => (it.url ?? '').toLowerCase()) }
     })
 
-    const ops = derivedClient.apply('sync-issyes' + generateId())
+    const ops = derivedClient.apply()
 
     for (const issue of issues) {
       try {

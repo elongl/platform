@@ -417,7 +417,7 @@ export function recheckNotifications (context: DocNotifyContext): void {
     const toReadData = Array.from(toRead)
     toRead.clear()
     void (async () => {
-      const _client = client.apply(generateId(), 'recheckNotifications')
+      const _client = client.apply(undefined, 'recheckNotifications')
       await inboxClient.readNotifications(_client, toReadData)
       await _client.commit()
     })()
@@ -434,7 +434,7 @@ export async function readChannelMessages (
 
   const inboxClient = InboxNotificationsClientImpl.getClient()
 
-  const client = getClient().apply(generateId(), 'readViewportMessages')
+  const client = getClient().apply(undefined, 'readViewportMessages')
   try {
     const readMessages = get(chatReadMessagesStore)
     const allIds = getAllIds(messages).filter((id) => !readMessages.has(id))
